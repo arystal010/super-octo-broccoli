@@ -1,0 +1,49 @@
+name: Cleanup Repo (Keep Only Workflows)
+
+on:
+  workflow_dispatch:  # lets you trigger it manually from the Actions tab
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # needed to commit and push
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Delete everything except .github/workflows
+        run: |
+          set -euo pipefail
+
+          # Remove all top-level files/folders except .github
+          find . -maxdepth 1 -mindepth 1 \
+            ! -name '.git' \
+            ! -name '.github' \
+            -exec rm -rf {} +
+
+          # Inside .github, remove everything except workflows
+          if [ -d '.github' ]; then
+            find .github -maxdepth 1 -mindepth 1 \
+              ! -name 'workflows' \
+              -exec rm -rf {} +
+          fi
+
+      - name: Commit and push changes
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+          git add -A
+
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "chore: delete all files except .github/workflows"
+          git push
