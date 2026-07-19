@@ -1,11 +1,12 @@
-name = "arys-ai-worker"
+# wrangler.toml
+name = 'super-octo-broccoli'
 main = "worker/index.js"
 compatibility_date = "2026-07-15"
 workers_dev = true
 minify = true
 
 [vars]
-APP_URL = "https://arysai.pages.dev"
+APP_URL = "https://arystal010.github.io/super-octo-broccoli/"
 
 # Add your OpenRouter API key as a secret (never put it here):
 # wrangler secret put OPENROUTER_API_KEY
