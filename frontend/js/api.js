@@ -1,100 +1,82 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Streaming API Test</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-        #output {
-            border: 1px solid #ccc;
-            padding: 15px;
-            min-height: 100px;
-            margin: 10px 0;
-            white-space: pre-wrap;
-        }
-        button {
-            padding: 10px 15px;
-            background-color: #4CAF50;
-            color: white;
-            border: none;
-            cursor: pointer;
-        }
-        button:hover {
-            background-color: #45a049;
-        }
-        .status {
-            margin: 10px 0;
-            padding: 5px;
-        }
-        .success {
-            color: green;
-        }
-        .error {
-            color: red;
-        }
-    </style>
-</head>
-<body>
-    <h1>Streaming API Test</h1>
-    <p>This test verifies that the streaming API fix works correctly.</p>
-
-    <div>
-        <button id="testButton">Test Streaming API</button>
-    </div>
-
-    <div class="status" id="status"></div>
-
-    <div id="output"></div>
-
-    <script type="module">
-        // Import the fixed streamChat function
-        import { streamChat } from './frontend/js/api.js';
-
-        document.getElementById('testButton').addEventListener('click', async function() {
-            const statusElement = document.getElementById('status');
-            const outputElement = document.getElementById('output');
-
-            statusElement.textContent = 'Testing streaming API...';
-            statusElement.className = 'status';
-            outputElement.textContent = '';
-
-            try {
-                // Test with a simple message
-                const messages = [
-                    { role: 'user', content: 'Hello, how are you?' }
-                ];
-
-                let fullResponse = '';
-
-                await streamChat(
-                    messages,
-                    (token) => {
-                        fullResponse += token;
-                        outputElement.textContent = fullResponse;
-                    },
-                    () => {
-                        statusElement.textContent = 'Streaming completed successfully!';
-                        statusElement.className = 'status success';
-                        console.log('Full response:', fullResponse);
-                    },
-                    (error) => {
-                        statusElement.textContent = 'Error: ' + error.message;
-                        statusElement.className = 'status error';
-                        console.error('Streaming error:', error);
-                    }
-                );
-            } catch (error) {
-                statusElement.textContent = 'Test failed: ' + error.message;
-                statusElement.className = 'status error';
-                console.error('Test error:', error);
-            }
+export async function streamChat(messages, onToken, onDone, onError, signal) {
+    try {
+        const response = await fetch('/api/chat', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ messages }),
+            signal: signal // Add support for abort signal
         });
-    </script>
-</body>
-</html>
+
+        if (!response.ok) {
+            throw new Error(
+                `HTTP ${response.status}`
+            );
+        }
+
+        // Handle streaming response using Server-Sent Events
+        if (response.headers.get('Content-Type') === 'text/event-stream') {
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let fullContent = ''; // Track full content for onToken callback
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+
+                for (const line of lines) {
+                    const trimmed = line.trim();
+                    if (!trimmed || trimmed.startsWith(':')) continue;
+
+                    if (trimmed.startsWith('data: ')) {
+                        const data = trimmed.slice(6);
+                        if (data === '[DONE]') continue;
+
+                        try {
+                            const parsed = JSON.parse(data);
+                            switch (parsed.type) {
+                                case 'text':
+                                    if (parsed.content) {
+                                        fullContent += parsed.content; // Accumulate full content
+                                        onToken(parsed.content, fullContent); // Pass both token and full content
+                                    }
+                                    break;
+                                case 'search':
+                                    // Handle search status if needed
+                                    console.log('Search status:', parsed.status);
+                                    break;
+                                case 'diagnostic':
+                                    // Handle diagnostic info if needed
+                                    console.log('Diagnostic info:', parsed.info);
+                                    break;
+                                case 'done':
+                                    onDone(fullContent); // Pass accumulated full content
+                                    break;
+                                case 'error':
+                                    onError(new Error(parsed.error));
+                                    break;
+                            }
+                        } catch (e) {
+                            console.error('Error parsing SSE data:', e);
+                        }
+                    }
+                }
+            }
+        } else {
+            // Fallback for non-streaming responses
+            const data = await response.json();
+            onToken(data.content, data.content); // Pass both token and full content
+            onDone(data.content);
+        }
+    } catch (err) {
+        if (err.name !== 'AbortError') { // Don't report abort errors
+            onError(err);
+        }
+    }
+}
