@@ -1,204 +1,72 @@
-// docs/js/api.js
+// docs/js/config.js
 //
-// Arys AI v1.5.1 — API client for chat and feedback
+// Arys AI v1.5.1 — Configuration
+// Centralized configuration for the frontend
 
-import { CONFIG } from "./config.js";
-import { getApiSettings } from "./settings.js";
+export const CONFIG = {
+    // API - Point to the Cloudflare Worker
+    apiBase: "https://super-octo-broccoli.ackcrp.workers.dev",
+    chatEndpoint: "/chat",
+    feedbackEndpoint: "/feedback",
+    healthEndpoint: "/health",
 
-// ============================================================
-// Stream a chat completion
-// ============================================================
-export async function streamChat(messages, onToken, onDone, onError, signal = null) {
-    const settings = getApiSettings();
+    // Default settings
+    defaults: {
+        model: "deepseek/deepseek-chat-v3-0324",
+        temperature: 0.7,
+        maxTokens: 4096,
+        enableWebSearch: true,
+        enableAutoSearch: true,
+        searchDepth: 6,
+        enableStreaming: true,
+        theme: "dark",
+    },
 
-    // Validate we have messages
-    if (!messages || messages.length === 0) {
-        onError(new Error("No messages provided"));
-        return;
-    }
+    // Available models
+    models: [
+        { id: "deepseek/deepseek-chat-v3-0324", name: "DeepSeek V3", description: "Latest DeepSeek model with strong reasoning" },
+        { id: "deepseek/deepseek-r1-distill-llama-70b", name: "DeepSeek R1 (70B)", description: "Reasoning-focused model distilled from R1" },
+        { id: "gryphe/mythomax-l2-13b", name: "MythoMax 13B", description: "Creative and conversational model" },
+        { id: "mistralai/mistral-7b-instruct", name: "Mistral 7B Instruct", description: "Fast and efficient instruction model" },
+        { id: "openai/gpt-3.5-turbo", name: "GPT-3.5 Turbo", description: "OpenAI's fast and capable model" },
+    ],
 
-    // Build request payload
-    const payload = {
-        messages,
-        model: settings.model,
-        temperature: settings.temperature,
-        maxTokens: settings.maxTokens,
-        enableWebSearch: settings.enableWebSearch,
-        enableAutoSearch: settings.enableAutoSearch,
-        searchDepth: settings.searchDepth,
-        enableStreaming: settings.enableStreaming,
-    };
+    // Themes
+    themes: [
+        { id: "dark", name: "Dark", preview: "#0a0a0f" },
+        { id: "light", name: "Light", preview: "#f5f5f7" },
+        { id: "midnight", name: "Midnight", preview: "#050816" },
+        { id: "frost", name: "Frost", preview: "#e0e8f0" },
+    ],
 
-    try {
-        const fetchOptions = {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify(payload),
-        };
+    // Feedback types
+    feedbackTypes: [
+        { id: "bug", name: "Bug", icon: "bug" },
+        { id: "suggestion", name: "Suggestion", icon: "suggestion" },
+        { id: "feature", name: "Feature", icon: "feature" },
+        { id: "other", name: "Other", icon: "other" },
+    ],
 
-        if (signal) {
-            fetchOptions.signal = signal;
-        }
+    // Limits
+    limits: {
+        maxMessageLength: 10000,
+        maxFeedbackMessageLength: 5000,
+        maxNameLength: 100,
+        maxEmailLength: 200,
+        minFeedbackMessageLength: 10,
+        maxHistoryItems: 50,
+    },
 
-        const response = await fetch(`${CONFIG.apiBase}${CONFIG.chatEndpoint}`, fetchOptions);
+    // Animation durations
+    animation: {
+        screenTransition: 600,
+        messageIn: 300,
+        modalIn: 250,
+        toastIn: 300,
+        typingBounce: 1400,
+    },
 
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => null);
-            const errorMessage =
-                errorData?.error || `Server returned HTTP ${response.status}: ${response.statusText}`;
-            onError(new Error(errorMessage));
-            return;
-            }
-
-        // Handle streaming response
-        const contentType = response.headers.get("Content-Type") || "";
-        if (contentType.includes("text/event-stream") || response.headers.get("Transfer-Encoding") === "chunked") {
-            await handleStream(response, onToken, onDone, onError);
-        } else {
-            // Non-streaming response
-            const data = await response.json();
-            const content = data?.choices?.[0]?.message?.content || data?.message || "";
-            onToken(content);
-            onDone(content);
-        }
-    } catch (err) {
-        // Handle abort errors gracefully
-        if (err.name === "AbortError") {
-            // User cancelled — not an error, just complete with what we have
-            if (fullContent) {
-                onDone(fullContent);
-            } else {
-                onDone("");
-            }
-            return;
-        }
-
-        // Network or unexpected error
-        const message = err.message || "Network request failed. Check your connection and try again.";
-        onError(new Error(message));
-    }
-}
-
-// ============================================================
-// Handle SSE stream
-// ============================================================
-async function handleStream(response, onToken, onDone, onError) {
-    const reader = response.body?.getReader();
-    if (!reader) {
-        onError(new Error("Stream not available"));
-        return;
-    }
-
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let fullContent = "";
-
-    try {
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            const chunk = decoder.decode(value, { stream: true });
-            buffer += chunk;
-
-            // Parse SSE events
-            const lines = buffer.split("\n");
-            buffer = lines.pop() || "";
-
-            for (const line of lines) {
-                const trimmed = line.trim();
-                if (!trimmed || trimmed.startsWith(":")) continue;
-
-                if (trimmed.startsWith("data: ")) {
-                    const data = trimmed.slice(6);
-                    
-                    if (data === "[DONE]") {
-                        continue;
-                    }
-
-                     try {
-                         const parsed = JSON.parse(data);
-
-                         // Handle typed SSE events from worker
-                         if (parsed.type === "text" && parsed.content) {
-                             fullContent += parsed.content;
-                             onToken(parsed.content, fullContent);
-                         } else if (parsed.type === "done") {
-                             onDone(fullContent);
-                             return;
-                         } else if (parsed.type === "error") {
-                             onError(new Error(parsed.error || "Stream error"));
-                             return;
-                         } else if (parsed.type === "search") {
-                             // Search status events can be ignored or logged
-                             console.log("Search status:", parsed.status);
-                         } else {
-                             // Fallback to OpenRouter format for compatibility
-                             const content = parsed?.choices?.[0]?.delta?.content ||
-                                            parsed?.choices?.[0]?.message?.content ||
-                                            parsed?.content || "";
-
-                             if (content) {
-                                 fullContent += content;
-                                 onToken(content, fullContent);
-                             }
-                         }
-                     } catch {
-                         // If raw text, treat as content
-                         if (data && data !== "[DONE]") {
-                             fullContent += data;
-                             onToken(data, fullContent);
-                         }
-                     }
-                }
-            }
-        }
-    } catch (err) {
-        // Stream error - still deliver what we got
-        onError(new Error(`Stream interrupted: ${err.message}`));
-        if (fullContent) {
-            onDone(fullContent);
-        }
-        return;
-    }
-
-    onDone(fullContent);
-}
-
-// ============================================================
-// Submit feedback
-// ============================================================
-export async function submitFeedback({ name, email, type, message, rating }) {
-    const response = await fetch(`${CONFIG.apiBase}${CONFIG.feedbackEndpoint}`, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-            name: name || "",
-            email: email || "",
-            type: type || "bug",
-            message: message || "",
-            rating: rating || 0,
-        }),
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-        throw new Error(data?.message || data?.error || "Failed to submit feedback");
-    }
-
-    return data;
-}
-
-// ============================================================
-// Check health
-// ============================================================
-export async function checkHealth() {
-    const response = await fetch(`${CONFIG.apiBase}${CONFIG.healthEndpoint}`);
-    const data = await response.json();
-    return data;
-}
+    // Version
+    version: "1.5.1",
+    buildDate: "2026-07-18",
+};
